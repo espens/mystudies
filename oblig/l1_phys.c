@@ -18,6 +18,9 @@ static phys_conn_t my_conns[MAX_CONNS];
 
 int my_udp_socket = -1;
 
+/* Local mac address */
+int my_local_mac_address = -1;
+
 /* Finds the connection associated with the given sockaddr */
 static phys_conn_t *get_phys_conn( struct sockaddr_in *addr ) {
     phys_conn_t *conn = NULL;
@@ -97,6 +100,9 @@ static phys_conn_t *create_phys_conn( const char *hostname, unsigned short port 
  * local_port is the port that for the local UDP socket that
  *   we will use for all communication.
  *
+ * local_mac_address is the MAC address of this server. 
+ *  Specified on the command line
+ *
  * hosts is a pointer to an array of remote hostnames and ports
  *   that we want to establish connections to. Each entry in
  *   hosts represents one network device. The index of the entry
@@ -109,11 +115,12 @@ static phys_conn_t *create_phys_conn( const char *hostname, unsigned short port 
  * physical cables, so it should be done completely before
  * continuing.
  */
-void l1_init( int local_port )
+void l1_init( int local_port, int local_mac_address )
 {
     int                err;
     struct sockaddr_in addr;
 
+	my_local_mac_address = local_mac_address;
     my_udp_socket = socket( PF_INET, SOCK_DGRAM, IPPROTO_UDP );
     if( my_udp_socket < 0 )
     {
@@ -151,8 +158,7 @@ int l1_connect( const char* hostname, int port )
     }
 
 	char connect_msg[15];
-	int mac = 0;
-	snprintf(connect_msg, sizeof connect_msg, "CONNECT %d", mac);
+	snprintf(connect_msg, sizeof connect_msg, "CONNECT %d", my_local_mac_address);
 	conn->state = CONNECTING;
 	
 	ssize_t bytes_sent = sendto(my_udp_socket, connect_msg, strlen(connect_msg)+1, 0, (struct sockaddr*) &conn->addr, sizeof(struct sockaddr_in));
@@ -161,8 +167,6 @@ int l1_connect( const char* hostname, int port )
 	} else {
 		printf("l1_connect(): Sent %d bytes.\n", (int)bytes_sent);
 	}
-
-    /* ... */
 
     /*
      * Extend this function to set up all the necessary information that 
@@ -186,9 +190,22 @@ int l1_connect( const char* hostname, int port )
  */
 int l1_send( int device, const char* buf, int length )
 {    
-    /* ... */
-    return -1;
-    /* ... */
+	// Get the connection corresponding to the provided device
+	phys_conn_t *connection = &my_conns[device];
+	
+	if(!connection) {
+		fprintf(stderr, "Device %d doesn't exist. Unable to send message.", device);
+		return -1;
+	}
+	
+	ssize_t bytes_sent = sendto(my_udp_socket, buf, length, 0, (struct sockaddr*) &connection->addr, sizeof(struct sockaddr_in));
+	if(bytes_sent == -1) {
+		perror("l1_send()");
+	} else {
+		printf("l1_send(): Sent %d bytes.\n", (int)bytes_sent);		
+	}
+	return bytes_sent;
+	
 
     /*
      * Extend this function so that you send the given data over YOUR
@@ -216,11 +233,14 @@ static phys_conn_t *l1_linkup( phys_conn_t *conn, const char* other_hostname, in
 
     if ( !conn) {
         /* If the conn parameter was NULL, we need to assign a new device.  */
-
-        /* ... */
+		conn = create_phys_conn(other_hostname, other_port);
    }
+	
+	printf("Physical link with device=%d is UP", conn->device);
+	conn->state = ESTABLISHED;
 
-    /* ... */
+	// Inform the link layer
+	l2_linkup(conn->device, other_hostname, other_port, other_address);
 
     return conn;
 }
@@ -252,17 +272,68 @@ void l1_handle_event( )
 
 	if(bytes_received == -1) {
 		perror("l1_handle_event(): recvfrom()");
+		return;
+	} else if (bytes_received==0) {
+		fprintf(stderr, "The UDP socket has been closed.");
+		return;
 	}
 	
 	phys_conn_t* connection = get_phys_conn(&source_addr);
 
 	if( !connection ) {
-		int mac_addr;
-		printf("New connection\n");
-		if(sscanf(message, "CONNECT %d", &mac_addr)==1) {
-			printf("l1_handle_event():CONNECT %d\n", mac_addr);
+		// Get hostname of the source
+		char source_host[NI_MAXHOST], source_port[NI_MAXSERV];
+		if (getnameinfo(
+						(struct sockaddr *)&source_addr, 
+						address_len, 
+						source_host, sizeof(source_host), 
+						source_port, sizeof(source_port), 
+						NI_NUMERICHOST | NI_NUMERICSERV)) {
+			perror("l1_handle_event(): getnameinfo()");
 		}
-	}
+
+		int source_mac;
+		printf("New connection from host=%s, serv=%s\n", source_host, source_port);
+		if(sscanf(message, "CONNECT %d", &source_mac)==1) {
+			printf("l1_handle_event():CONNECT request from MAC %d\n", source_mac);
+			
+			connection = l1_linkup(NULL, source_host, atoi(source_port), source_mac);
+			
+			// Send UP message
+			char up_msg[10];
+			snprintf(up_msg, 10, "UP %d", my_local_mac_address); 
+			ssize_t bytes_sent = sendto(my_udp_socket, up_msg, strlen(up_msg)+1, 0, (struct sockaddr*) &connection->addr, sizeof(struct sockaddr_in));
+			if(bytes_sent == -1) {
+				perror("l1_connect() sendto");
+			} else {
+				printf("l1_connect(): Sent %d bytes.\n", (int)bytes_sent);
+			}
+			// Done handling the CONNECT request
+			return;
+
+		} else {
+			printf("Unexpected data. Expected CONNECT request.\n");
+		}
+	} else {
+		// There already exists a connection from this host and port.
+		// Are we in the process of establishing a link?
+		if(connection->state == CONNECTING) {
+			// At this point we expect an UP message
+			int source_mac;
+			if(sscanf(message, "UP %d", &source_mac)==1) {
+				printf("l1_handle_event():UP response from MAC %d\n", source_mac);
+				l1_linkup(connection, connection->remote_hostname, connection->remote_port, source_mac);
+				// Done processing the UP response
+				return;
+			} else {
+				printf("Unexpected data. Expected an UP resonse.\n");
+				return;
+			}
+		}
+	} 
+	
+	// The link is already established. Forward the data to the link layer
+	l2_recv(connection->device, message, bytes_received);
 
 	
     /* ... */

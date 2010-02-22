@@ -50,7 +50,7 @@ int main( int argc, char* argv[] )
      * to send connect-requests and handle the responses later, in
      * the handle_events loop. Your choice.
      */
-    l1_init( udp_socket_port );
+    l1_init( udp_socket_port, local_mac_address );
     l2_init( local_mac_address, phys_device );
     l3_init( local_host_address );
     l4_init( );

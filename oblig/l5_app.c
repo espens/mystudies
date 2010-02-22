@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "slow_receiver.h"
 #include "l5_app.h"
@@ -66,7 +67,17 @@ void l5_handle_keyboard( )
 
         /* Your keyboard processing here */
 
-        /* ... */
+        if( strstr( buffer, "QUIT" ) != NULL )
+        {
+			exit(0);
+		}
+		int destination;
+		char filename[2048];
+        if( sscanf( buffer, "SEND %d %s", &destination, filename ) == 2 )
+        {
+			// Send file
+			printf("Sending file %s...\n", filename);
+		}
     }
 }
 

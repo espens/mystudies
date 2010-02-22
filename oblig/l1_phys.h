@@ -28,7 +28,7 @@ extern int my_udp_socket;
 
 /* see more comments in the c file */
 
-void l1_init( int local_port );
+void l1_init( int local_port, int local_mac_address );
 int  l1_connect( const char* hostname, int port );
 void l1_req_physical_connection( const char* hostname, int port );
 int  l1_send( int device, const char* buf, int length );

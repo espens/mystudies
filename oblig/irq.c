@@ -21,8 +21,8 @@
 /*
  * You will be interested to try things repeatedly after a little
  * bit of waiting time. This will happens at several layers, and
- * it will happen for several layers at the same time. This functions
- * helps you to register a function when a particular timer has
+ * it will happen for several layers at the same time. These functions
+ * help you to register a function when a particular timer has
  * expired. You can use a void pointer to give the function parameters
  */
 typedef void (*TimeoutCallFunc)(void *p);

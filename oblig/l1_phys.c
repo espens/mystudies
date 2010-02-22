@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <unistd.h>
+#include <arpa/inet.h> // Included to get inet_ntop(<#int #>, <#const void *#>, <#char *#>, <#socklen_t #>)
 
 #include "l1_phys.h"
 #include "l2_link.h"
@@ -39,7 +40,13 @@ static phys_conn_t *get_phys_conn( struct sockaddr_in *addr ) {
 /* Create an entry in the table of physical connection */
 static phys_conn_t *create_phys_conn( const char *hostname, unsigned short port )
 {
-    phys_conn_t *conn = NULL;
+    int status;                   // holds the status code returned system calls
+	struct addrinfo hints;        // hints for getaddrinfo(...)
+	struct addrinfo *addr;        // address populated by getaddrinfo()
+	char portstr[NI_MAXSERV];     // string to hold port number
+	char ipstr[INET_ADDRSTRLEN];  // string to hold IP address
+
+	phys_conn_t *conn = NULL;
 
     /* Find an available device id */
     int device;
@@ -63,12 +70,22 @@ static phys_conn_t *create_phys_conn( const char *hostname, unsigned short port 
     conn->remote_port = port;
     conn->state = UNASSIGNED;
 
+	// Get the sockaddr_in for the remote host and port 
+    memset(&hints, 0, sizeof(hints));  // Make sure the struct is empty 
+    
+	hints.ai_family = AF_INET;         // We only support IPv4
+	hints.ai_socktype = SOCK_DGRAM;    // Use UDP
+    snprintf (portstr, sizeof(portstr), "%u", port);  // Create a string with the port
 
-
-    /* ... */
-
-    /* HERE: Get the address of the remote host and initialize conn->addr.  */
-
+	if ((status = getaddrinfo(conn->remote_hostname, portstr, &hints, &addr)) != 0) {
+		// getaddrinfo failed
+		fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status ));
+		exit(1);
+	} else {
+		// Populate the connection struct with the sockaddr_in of the remote host,port.
+		conn->addr = *(struct sockaddr_in *)addr->ai_addr;
+		printf("Got addr of remote host: %s\n", inet_ntop(addr->ai_family, &(conn->addr.sin_addr), ipstr, sizeof ipstr));
+	}	
     
     return conn;
 }
@@ -133,6 +150,17 @@ int l1_connect( const char* hostname, int port )
         return -1;
     }
 
+	char connect_msg[15];
+	int mac = 0;
+	snprintf(connect_msg, sizeof connect_msg, "CONNECT %d", mac);
+	conn->state = CONNECTING;
+	
+	ssize_t bytes_sent = sendto(my_udp_socket, connect_msg, strlen(connect_msg)+1, 0, (struct sockaddr*) &conn->addr, sizeof(struct sockaddr_in));
+	if(bytes_sent == -1) {
+		perror("l1_connect() sendto");
+	} else {
+		printf("l1_connect(): Sent %d bytes.\n", (int)bytes_sent);
+	}
 
     /* ... */
 
@@ -216,7 +244,27 @@ static phys_conn_t *l1_linkup( phys_conn_t *conn, const char* other_hostname, in
  */
 void l1_handle_event( )
 {
+	char message[2048];
+	struct sockaddr_in source_addr;
+	socklen_t address_len = sizeof(source_addr);
+	
+	ssize_t bytes_received = recvfrom(my_udp_socket, message, sizeof(message), 0, (struct sockaddr *)&source_addr, &address_len);
 
+	if(bytes_received == -1) {
+		perror("l1_handle_event(): recvfrom()");
+	}
+	
+	phys_conn_t* connection = get_phys_conn(&source_addr);
+
+	if( !connection ) {
+		int mac_addr;
+		printf("New connection\n");
+		if(sscanf(message, "CONNECT %d", &mac_addr)==1) {
+			printf("l1_handle_event():CONNECT %d\n", mac_addr);
+		}
+	}
+
+	
     /* ... */
 
     /*
